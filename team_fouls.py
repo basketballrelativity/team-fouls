@@ -39,18 +39,24 @@ TEAM_FOUL_INDICATORS = [1, 2, 3, 5, 6, 9, 14, 15, 26, 27, 28, 29]
 # if a team is in the penalty
 NON_SHOOTING_FOULS = [1, 3, 27, 28]
 
+# League IDs
+LEAGUE_ID_MAP = {"NBA": "00", "WNBA": "10", "G": "20"}
+QUARTER_LENGTH = {"00": 720, "10": 600, "20": 720} # Quarter length in seconds
+OT_LENGTH = {"00": 300, "10": 300, "20": 120} # OT period length in seconds
+
 TWO_MINUTES = 120 # Seconds
 QUARTERS = 4
 REG_GAME_LENGTH = 720*QUARTERS # Game length in seconds
 THREE_QUARTER_LENGTH = 720*(QUARTERS - 1) # Length of three quarters in seconds
-OT_LENGTH = 300 # OT period length in seconds
 
 
-def get_game_ids(date: str) -> List:
+def get_game_ids(date: str, league_id: str) -> List:
 	""" get_game_ids returns the NBA game IDs
 	that take place on the provided date
 
 	@param date (str): Date in MM/DD/YYYY format
+	@param league_id (str): One of '00' (NBA), '10' (WNBA),
+		'20' (G League)
 
 	Returns:
 
@@ -59,7 +65,7 @@ def get_game_ids(date: str) -> List:
 
 	scores = scoreboard.ScoreBoard(headers=HEADERS,
                                	   endpoint='scoreboardv2',
-                                   league_id='00',
+                                   league_id=league_id,
                                	   game_date=date,
                                	   day_offset='0')
 
@@ -436,7 +442,7 @@ def team_foul_tracker(
 	return penalty_dict, winner_id, pbp_df
 
 
-def process_output(penalty_dict: Dict, winner_id: bool) -> pd.DataFrame:
+def process_output(penalty_dict: Dict, winner_id: bool, league_id: str) -> pd.DataFrame:
 	""" This function extracts useful information from the penalty
 	dictionary output from team_foul_tracker
 
@@ -444,6 +450,8 @@ def process_output(penalty_dict: Dict, winner_id: bool) -> pd.DataFrame:
 		committed, time spent in the penalty, and FT
 		surrendered for each team in a game
 	@params winner_id (bool): ID of winning team
+	@param league_id (str): One of '00' (NBA), '10' (WNBA),
+		'20' (G League)
 
 	Returns:
 
@@ -453,13 +461,16 @@ def process_output(penalty_dict: Dict, winner_id: bool) -> pd.DataFrame:
 
 	teams = list(penalty_dict.keys())
 	full_df = pd.DataFrame()
+
+	quarter_time = QUARTER_LENGTH[league_id]
+	ot_time = OT_LENGTH[league_id]
 	for team in teams:
 		# Find the opponent
 		other_team = [x for x in teams if x != team][0]
 		team_dict = penalty_dict[team]
 		other_team_dict = penalty_dict[other_team]
 
-		game_length = REG_GAME_LENGTH + OT_LENGTH * (len(team_dict["fouls"]) - QUARTERS)
+		game_length = QUARTERS * quarter_time + ot_time * (len(team_dict["fouls"]) - QUARTERS)
 		
 		# Calculate team foul related data to export. Because of the way team_foul_tracker is constructed,
 		# the time spent in the penalty, fouls accumulated, and FTs surrendered is for a team's defense.
@@ -469,17 +480,17 @@ def process_output(penalty_dict: Dict, winner_id: bool) -> pd.DataFrame:
 		temp_df = pd.DataFrame({"team_id": [team],
 								"game_length": [game_length],
 								"fouls_committed": [np.sum([team_dict["fouls"][x] for x in team_dict["fouls"]])],
-								"fouls_3q_committed": [np.sum([team_dict["fouls"][x] for x in team_dict["fouls"] if x < 4])],
+								"fouls_3q_committed": [np.sum([team_dict["fouls"][x] for x in team_dict["fouls"] if x < QUARTERS])],
 								"opp_tib": [np.sum([team_dict["time"][x] for x in team_dict["time"]])],
-								"opp_3q_tib": [np.sum([team_dict["time"][x] for x in team_dict["time"] if x < 4])],
+								"opp_3q_tib": [np.sum([team_dict["time"][x] for x in team_dict["time"] if x < QUARTERS])],
 								"ft_allowed": [np.sum([team_dict["free_throws"][x] for x in team_dict["free_throws"]])],
-								"ft_3q_allowed": [np.sum([team_dict["free_throws"][x] for x in team_dict["free_throws"] if x < 4])],
+								"ft_3q_allowed": [np.sum([team_dict["free_throws"][x] for x in team_dict["free_throws"] if x < QUARTERS])],
 								"fouls_against": [np.sum([other_team_dict["fouls"][x] for x in other_team_dict["fouls"]])],
-								"fouls_3q_against": [np.sum([other_team_dict["fouls"][x] for x in other_team_dict["fouls"] if x < 4])],
+								"fouls_3q_against": [np.sum([other_team_dict["fouls"][x] for x in other_team_dict["fouls"] if x < QUARTERS])],
 								"own_tib": [np.sum([other_team_dict["time"][x] for x in other_team_dict["time"]])],
-								"own_3q_tib": [np.sum([other_team_dict["time"][x] for x in other_team_dict["time"] if x < 4])],
+								"own_3q_tib": [np.sum([other_team_dict["time"][x] for x in other_team_dict["time"] if x < QUARTERS])],
 								"ft_gained": [np.sum([other_team_dict["free_throws"][x] for x in other_team_dict["free_throws"]])],
-								"ft_3q_gained": [np.sum([other_team_dict["free_throws"][x] for x in other_team_dict["free_throws"] if x < 4])],
+								"ft_3q_gained": [np.sum([other_team_dict["free_throws"][x] for x in other_team_dict["free_throws"] if x < QUARTERS])],
 								"win": [1 if team == winner_id else 0]})
 		full_df = pd.concat([full_df, temp_df])
 
@@ -488,8 +499,8 @@ def process_output(penalty_dict: Dict, winner_id: bool) -> pd.DataFrame:
 	full_df["own_percent_tib"] = full_df["own_tib"] / full_df["game_length"]
 
 	# Normalizing 3q time-in-bonus by three-quarters length
-	full_df["opp_percent_3q_tib"] = full_df["opp_3q_tib"] / THREE_QUARTER_LENGTH
-	full_df["own_percent_3q_tib"] = full_df["own_3q_tib"] / THREE_QUARTER_LENGTH
+	full_df["opp_percent_3q_tib"] = full_df["opp_3q_tib"] / (quarter_time * (QUARTERS - 1))
+	full_df["own_percent_3q_tib"] = full_df["own_3q_tib"] / (quarter_time * (QUARTERS - 1))
 
 	return full_df
 
@@ -729,7 +740,7 @@ def process_pbp(pbp_df: pd.DataFrame, penalty_dict: Dict, home_id: int) -> pd.Da
 	return rating_df
 
 
-def loop_through_games(start_date: str, end_date: str) -> pd.DataFrame:
+def loop_through_games(start_date: str, end_date: str, league: str) -> pd.DataFrame:
 	""" This function loops through dates and extracts
 	team foul and penalty data for each game
 
@@ -737,6 +748,7 @@ def loop_through_games(start_date: str, end_date: str) -> pd.DataFrame:
 		(YYYY-MM-DD)
 	@param end_date (str): Data on which games of interest end
 		(YYYY-MM-DD)
+	@param league (str): One of NBA, WNBA, or G
 
 	Returns:
 
@@ -745,14 +757,14 @@ def loop_through_games(start_date: str, end_date: str) -> pd.DataFrame:
 	"""
 
 	total_df = pd.DataFrame()
-
+	league_id = LEAGUE_ID_MAP[league]
 
 	for x in pd.date_range(start=start_date, end=end_date):
 		# Convert dates into properly formatted strings
 		date_obj = x.date()
 		date_str = date_obj.strftime("%m/%d/%Y")
 		print("Pulling " + date_str + " games")
-		game_id_list = get_game_ids(date_str)
+		game_id_list = get_game_ids(date_str, league_id)
 
 		# Looping through games on each data
 		for game_id in game_id_list:
@@ -763,7 +775,7 @@ def loop_through_games(start_date: str, end_date: str) -> pd.DataFrame:
 				# Track team fouls
 				penalty_dict, winner_id, pbp_df = team_foul_tracker(game_id, home_id, away_id, home_winner)
 				# Extract team foul data of interest
-				full_df = process_output(penalty_dict, winner_id)
+				full_df = process_output(penalty_dict, winner_id, league_id)
 				# Extract performance in/out of penalty
 				rating_df = process_pbp(pbp_df, penalty_dict, home_id)
 
@@ -785,6 +797,7 @@ def parse_args():
 			(YYYY-MM-DD)
 		- args.end_date (str): Data on which games of interest end
 			(YYYY-MM-DD)
+		- args.league (str): League of interest (WNBA, NBA, or G)
 	"""
 
 	parser = argparse.ArgumentParser(description='Start and end dates')
@@ -792,21 +805,23 @@ def parse_args():
 	                    help='Date on which games of interest start (YYYY-MM-DD)')
 	parser.add_argument('--end_date',
 	                    help='Date on which games of interest end (YYYY-MM-DD)')
+	parser.add_argument('--league',
+	                    help='One of NBA, WNBA, or G corresponding to the league of interest')
 
 	args = parser.parse_args()
-	if not (args.start_date and args.end_date):
-		raise Exception("Invalid args: must provde --start_date and --end_date")
+	if not (args.start_date and args.end_date and args.league):
+		raise Exception("Invalid args: must provde --start_date, --end_date, --league")
 
-	return args.start_date, args.end_date
+	return args.start_date, args.end_date, args.league
 
 
 def main():
 	""" main, ya cowboy
 	"""
 
-	start_date, end_date = parse_args()
-	total_df = loop_through_games(start_date, end_date)
-	total_df.to_csv("team_fouls_" + start_date + "_to_" + end_date + ".csv", index=False)
+	start_date, end_date, league = parse_args()
+	total_df = loop_through_games(start_date, end_date, league)
+	total_df.to_csv("team_fouls_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
 
 
 if __name__ == "__main__":
