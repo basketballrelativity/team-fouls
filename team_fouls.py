@@ -196,25 +196,33 @@ def str_to_time(time_str: str, period: int) -> int:
     return seconds_left_period
 
 
-def add_fouls(foul_dict: Dict, quarter_time: int) -> Dict:
+def add_fouls(foul_dict: Dict, period: int, quarter_time: int, team_id: int, penalty_dict: Dict) -> Dict:
 	""" This function adds fouls to a team's total and their
 	L2M total if applicable
 
 	@param foul_dict (dict): Dictionary containing the number of fouls
 		and L2M fouls a team has accumulated
+	@param period (int): Game quarter (5 is OT1, 6 is OT2, etc.)
 	@param quarter_time (int): Time remaining in the quarter
+	@param team_id (int): Unique identifier of team committing a foul
+	@param penalty_dict (dict): Dictionary containing team foul
+		related data
 
 	Returns:
 
 		- foul_dict (int): Incremented number of team fouls
 			and L2M fouls in the quarter
+		- penalty_dict (dict): Dictionary containing updated
+			team foul related data
 	"""
 
 	foul_dict["fouls"] += 1
+	penalty_dict[team_id]["time_to_foul"][period][foul_dict["fouls"]] = foul_dict["last_foul_time"] - quarter_time
+	foul_dict["last_foul_time"] = quarter_time
 	if quarter_time <= TWO_MINUTES:
 		foul_dict["l2m"] += 1
 
-	return foul_dict
+	return foul_dict, penalty_dict
 
 
 def is_in_penalty(foul_dict: Dict, period: int, penalty: bool) -> Union[bool, int]:
@@ -280,7 +288,7 @@ def process_foul_df(pbp_df: pd.DataFrame) -> pd.DataFrame:
 	return foul_df
 
 
-def initialize_status_variables(home_id: int, away_id: int, period: int) -> Union[Dict, Dict, Dict]:
+def initialize_status_variables(home_id: int, away_id: int, period: int, league_id: str) -> Union[Dict, Dict, Dict]:
 	""" This function simply initializes many variables
 	that will be used to track and store team foul information
 
@@ -289,6 +297,8 @@ def initialize_status_variables(home_id: int, away_id: int, period: int) -> Unio
 	@param away_id (int): 10-digit integer that uniquely identifies the
 		away team
 	@param period (int): Game quarter (5 is OT1, 6 is OT2, etc.)
+	@param league_id (str): One of '00' (NBA), '10' (WNBA),
+		'20' (G League)
 
 	Returns:
 
@@ -301,13 +311,15 @@ def initialize_status_variables(home_id: int, away_id: int, period: int) -> Unio
 			surrendered for each team in a game
 	"""
 
-	home_dict = {"fouls": 0, "l2m": 0, "penalty": False}
-	away_dict = {"fouls": 0, "l2m": 0, "penalty": False}
+	home_dict = {"fouls": 0, "l2m": 0, "last_foul_time": QUARTER_LENGTH[league_id], "penalty": False}
+	away_dict = {"fouls": 0, "l2m": 0, "last_foul_time": QUARTER_LENGTH[league_id], "penalty": False}
 	penalty_dict = {}
 	penalty_dict[home_id] = {}
 	penalty_dict[away_id] = {}
 	penalty_dict[home_id]["fouls"] = {}
 	penalty_dict[away_id]["fouls"] = {}
+	penalty_dict[home_id]["time_to_foul"] = {}
+	penalty_dict[away_id]["time_to_foul"] = {}
 	penalty_dict[home_id]["free_throws"] = {}
 	penalty_dict[away_id]["free_throws"] = {}
 	penalty_dict[home_id]["time"] = {}
@@ -318,11 +330,13 @@ def initialize_status_variables(home_id: int, away_id: int, period: int) -> Unio
 	penalty_dict[away_id]["time"][period] = 0
 	penalty_dict[home_id]["free_throws"][period] = 0
 	penalty_dict[away_id]["free_throws"][period] = 0
+	penalty_dict[home_id]["time_to_foul"][period] = {}
+	penalty_dict[away_id]["time_to_foul"][period] = {}
 
 	return home_dict, away_dict, penalty_dict
 
 
-def reset_status_variables(home_id: int, away_id: int, period: int, penalty_dict: Dict) -> Union[Dict, Dict, Dict, int]:
+def reset_status_variables(home_id: int, away_id: int, period: int, penalty_dict: Dict, league_id: str) -> Union[Dict, Dict, Dict, int]:
 	""" This function resets the status variables when a quarter
 	turns over
 
@@ -333,6 +347,8 @@ def reset_status_variables(home_id: int, away_id: int, period: int, penalty_dict
 	@param period (int): Game quarter (5 is OT1, 6 is OT2, etc.)
 	@param penalty_dict (dict): Dictionary containing team foul
 		related data
+	@param league_id (str): One of '00' (NBA), '10' (WNBA),
+		'20' (G League)
 
 	Returns:
 
@@ -345,15 +361,18 @@ def reset_status_variables(home_id: int, away_id: int, period: int, penalty_dict
 			surrendered for each team in a game
 		- period (int): Period incremented by one
 	"""
+	last_foul_time = QUARTER_LENGTH[league_id] if period <= 4 else OT_LENGTH[league_id]
 
-	home_dict = {"fouls": 0, "l2m": 0, "penalty": False}
-	away_dict = {"fouls": 0, "l2m": 0, "penalty": False}
+	home_dict = {"fouls": 0, "l2m": 0, "last_foul_time": last_foul_time, "penalty": False}
+	away_dict = {"fouls": 0, "l2m": 0, "last_foul_time": last_foul_time, "penalty": False}
 
 	period += 1
 	penalty_dict[home_id]["time"][period] = 0
 	penalty_dict[away_id]["time"][period] = 0
 	penalty_dict[home_id]["free_throws"][period] = 0
 	penalty_dict[away_id]["free_throws"][period] = 0
+	penalty_dict[home_id]["time_to_foul"][period] = {}
+	penalty_dict[away_id]["time_to_foul"][period] = {}
 
 
 	return home_dict, away_dict, penalty_dict, period
@@ -386,7 +405,7 @@ def update_status_variables(
 	time_remaining = str_to_time(play["PCTIMESTRING"], period)
 
 	# Increment fouls and check if team is in the penalty
-	foul_dict = add_fouls(foul_dict, time_remaining)
+	foul_dict, penalty_dict = add_fouls(foul_dict, period, time_remaining, team_id, penalty_dict)
 	check_penalty, penalty_fouls = is_in_penalty(foul_dict, period, time_remaining)
 
 	# Increment two FTA if a non-shooting team foul occurs for a team in the penalty
@@ -404,7 +423,7 @@ def update_status_variables(
 
 
 def team_foul_tracker(
-		game_id: str, home_id: int, away_id: int, home_winner: bool
+		game_id: str, home_id: int, away_id: int, home_winner: bool, league_id: str
 ) -> Union[Dict, int, pd.DataFrame]:
 	""" This function calculates the number of team fouls accumulated
 	by team per quarter (or overtime period). In addition, other metadata
@@ -425,6 +444,8 @@ def team_foul_tracker(
 		away team
 	@param home_winner (bool): Boolean indicating whether the home team won
 		the game
+	@param league_id (str): One of '00' (NBA), '10' (WNBA),
+		'20' (G League)
 
 	Returns:
 
@@ -443,7 +464,7 @@ def team_foul_tracker(
 		
 		# Status variables
 		period = 1
-		home_dict, away_dict, penalty_dict = initialize_status_variables(home_id, away_id, period)
+		home_dict, away_dict, penalty_dict = initialize_status_variables(home_id, away_id, period, league_id)
 
 		# Loop through each foul
 		for _, row in foul_df.iterrows():
@@ -451,7 +472,7 @@ def team_foul_tracker(
 				# Reset foul information if the period turns over
 				penalty_dict[home_id]["fouls"][period] = home_dict["fouls"]
 				penalty_dict[away_id]["fouls"][period] = away_dict["fouls"]
-				home_dict, away_dict, penalty_dict, period = reset_status_variables(home_id, away_id, period, penalty_dict)
+				home_dict, away_dict, penalty_dict, period = reset_status_variables(home_id, away_id, period, penalty_dict, league_id)
 
 
 			# Update team fouls and penalty status for the corresponding team
@@ -837,7 +858,9 @@ def process_pbp(pbp_df: pd.DataFrame, penalty_dict: Dict, home_id: int) -> pd.Da
 		"def_poss_np": [team_df[team_df["team_id"]==teams[1]]["off_poss_np"].iloc[0],
 						 team_df[team_df["team_id"]==teams[0]]["off_poss_np"].iloc[0],],
 		"def_tov_np": [team_df[team_df["team_id"]==teams[1]]["off_tov_np"].iloc[0],
-						 team_df[team_df["team_id"]==teams[0]]["off_tov_np"].iloc[0],]
+						 team_df[team_df["team_id"]==teams[0]]["off_tov_np"].iloc[0],],
+		"time_to_foul": [penalty_dict[teams[0]]["time_to_foul"],
+						 penalty_dict[teams[1]]["time_to_foul"]]
 		})
 
 	return rating_df
@@ -885,7 +908,7 @@ def loop_through_games(start_date: str, end_date: str, league: str, season: str)
 			time.sleep(3) # Give the NBA API a break
 			if home_winner is not None:
 				# Track team fouls
-				penalty_dict, winner_id, pbp_df = team_foul_tracker(game_id, home_id, away_id, home_winner)
+				penalty_dict, winner_id, pbp_df = team_foul_tracker(game_id, home_id, away_id, home_winner, league_id)
 				if pbp_df is not None:
 					time.sleep(3)
 					# Pull shot data
