@@ -15,7 +15,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from py_ball import playbyplay, boxscore, scoreboard
+from py_ball import playbyplay, boxscore, scoreboard, player
 
 
 # Header information needed for py_ball
@@ -48,6 +48,34 @@ TWO_MINUTES = 120 # Seconds
 QUARTERS = 4
 REG_GAME_LENGTH = 720*QUARTERS # Game length in seconds
 THREE_QUARTER_LENGTH = 720*(QUARTERS - 1) # Length of three quarters in seconds
+
+
+def get_shot_data(season: str, game_id: str, league_id: str) -> List:
+	""" get_game_ids returns the NBA game IDs
+	that take place on the provided date
+
+	@param season (str): Season in YYYY-ZZ format for NBA
+		and G-League, YYYY format for WNBA
+	@param game_id (str): Unique identifier for the game
+	@param league_id (str): One of '00' (NBA), '10' (WNBA),
+		'20' (G League)
+
+	Returns:
+
+		- shot_df (DataFrame): DataFrame containing all
+			shot data
+	"""
+
+	shots = player.Player(headers=HEADERS,
+                          endpoint='shotchartdetail',
+                          league_id=league_id,
+                          player_id='0',
+                          game_id=game_id,
+                          season=season)
+
+	shot_df = pd.DataFrame(shots.data['Shot_Chart_Detail'])
+
+	return shot_df
 
 
 def get_game_ids(date: str, league_id: str) -> List:
@@ -409,35 +437,38 @@ def team_foul_tracker(
 
 	pbp_df = pull_pbp_file(game_id)
 
-	# Isolate fouls
-	foul_df = process_foul_df(pbp_df)
-	
-	# Status variables
-	period = 1
-	home_dict, away_dict, penalty_dict = initialize_status_variables(home_id, away_id, period)
+	if len(pbp_df) > 0:
+		# Isolate fouls
+		foul_df = process_foul_df(pbp_df)
+		
+		# Status variables
+		period = 1
+		home_dict, away_dict, penalty_dict = initialize_status_variables(home_id, away_id, period)
 
-	# Loop through each foul
-	for _, row in foul_df.iterrows():
-		if period != row["PERIOD"]:
-			# Reset foul information if the period turns over
-			penalty_dict[home_id]["fouls"][period] = home_dict["fouls"]
-			penalty_dict[away_id]["fouls"][period] = away_dict["fouls"]
-			home_dict, away_dict, penalty_dict, period = reset_status_variables(home_id, away_id, period, penalty_dict)
+		# Loop through each foul
+		for _, row in foul_df.iterrows():
+			if period != row["PERIOD"]:
+				# Reset foul information if the period turns over
+				penalty_dict[home_id]["fouls"][period] = home_dict["fouls"]
+				penalty_dict[away_id]["fouls"][period] = away_dict["fouls"]
+				home_dict, away_dict, penalty_dict, period = reset_status_variables(home_id, away_id, period, penalty_dict)
 
 
-		# Update team fouls and penalty status for the corresponding team
-		if row["EVENTMSGACTIONTYPE"] in TEAM_FOUL_INDICATORS:
-			if row["PLAYER1_TEAM_ID"] == home_id:
-				home_dict, penalty_dict = update_status_variables(row, period, home_id, home_dict, penalty_dict)
-			else:
-				away_dict, penalty_dict = update_status_variables(row, period, away_id, away_dict, penalty_dict)
+			# Update team fouls and penalty status for the corresponding team
+			if row["EVENTMSGACTIONTYPE"] in TEAM_FOUL_INDICATORS:
+				if row["PLAYER1_TEAM_ID"] == home_id:
+					home_dict, penalty_dict = update_status_variables(row, period, home_id, home_dict, penalty_dict)
+				else:
+					away_dict, penalty_dict = update_status_variables(row, period, away_id, away_dict, penalty_dict)
 
-	# Store team foul totals for final period
-	penalty_dict[home_id]["fouls"][period] = home_dict["fouls"]
-	penalty_dict[away_id]["fouls"][period] = away_dict["fouls"]
+		# Store team foul totals for final period
+		penalty_dict[home_id]["fouls"][period] = home_dict["fouls"]
+		penalty_dict[away_id]["fouls"][period] = away_dict["fouls"]
 
-	# Find ID of winning team
-	winner_id = home_id if home_winner else away_id
+		# Find ID of winning team
+		winner_id = home_id if home_winner else away_id
+	else:
+		penalty_dict, winner_id, pbp_df = None, None, None
 
 	return penalty_dict, winner_id, pbp_df
 
@@ -568,6 +599,7 @@ def possession_and_pts_estimate(pbp_df: pd.DataFrame) -> Union[int, float]:
 
 		- points (int): Points scored
 		- poss (float): Possessions used
+		- tov (int): Turnovers committed
 	"""
 
 	poss = 0.976 * (np.sum(pbp_df["FGA"]) +
@@ -575,8 +607,9 @@ def possession_and_pts_estimate(pbp_df: pd.DataFrame) -> Union[int, float]:
 					np.sum(pbp_df["OREB"]) +
 					np.sum(pbp_df["TOV"]))
 	points = np.sum(pbp_df["POINT"])
+	tov = np.sum(pbp_df["TOV"])
 
-	return points, poss
+	return points, poss, tov
 
 
 def calc_pts_and_poss(pbp_df: pd.DataFrame, team_id: int, event_num: int, period: int, home: bool) -> Dict:
@@ -625,9 +658,11 @@ def calc_pts_and_poss(pbp_df: pd.DataFrame, team_id: int, event_num: int, period
 
 	# If event_num is None, the team isn't in the penalty for the entire quarter
 	if event_num is None:
-		off_points_np, off_poss_np = possession_and_pts_estimate(off_df)
-		def_points_np, def_poss_np = possession_and_pts_estimate(def_df)
+		off_points_np, off_poss_np, off_tov_np = possession_and_pts_estimate(off_df)
+		def_points_np, def_poss_np, def_tov_np = possession_and_pts_estimate(def_df)
 
+		off_tov_p = 0
+		def_tov_p = 0
 		off_poss_p = 0
 		def_poss_p = 0
 		off_points_p = 0
@@ -640,19 +675,74 @@ def calc_pts_and_poss(pbp_df: pd.DataFrame, team_id: int, event_num: int, period
 		off_p_df = off_df[off_df["EVENTNUM"] >= event_num]
 		def_p_df = def_df[def_df["EVENTNUM"] >= event_num]
 
-		off_points_np, off_poss_np = possession_and_pts_estimate(off_np_df)
-		def_points_np, def_poss_np = possession_and_pts_estimate(def_np_df)
+		off_points_np, off_poss_np, off_tov_np = possession_and_pts_estimate(off_np_df)
+		def_points_np, def_poss_np, def_tov_np = possession_and_pts_estimate(def_np_df)
 
-		off_points_p, off_poss_p = possession_and_pts_estimate(off_p_df)
-		def_points_p, def_poss_p = possession_and_pts_estimate(def_p_df)
+		off_points_p, off_poss_p, off_tov_p = possession_and_pts_estimate(off_p_df)
+		def_points_p, def_poss_p, def_tov_p = possession_and_pts_estimate(def_p_df)
 
 	# Storing points and possession by penalty status
-	return_dict = {"off_rating": {"penalty": {"poss": off_poss_p, "points": off_points_p},
-								  "no_penalty": {"poss": off_poss_np, "points": off_points_np},},
-				   "def_rating": {"penalty": {"poss": def_poss_p, "points": def_points_p},
-								  "no_penalty": {"poss": def_poss_np, "points": def_points_np},}}
+	return_dict = {"off_rating": {"penalty": {"poss": off_poss_p, "points": off_points_p, "tov": off_tov_p},
+								  "no_penalty": {"poss": off_poss_np, "points": off_points_np, "tov": off_tov_np},},
+				   "def_rating": {"penalty": {"poss": def_poss_p, "points": def_points_p, "tov": def_tov_p},
+								  "no_penalty": {"poss": def_poss_np, "points": def_points_np, "tov": def_tov_np},}}
 
 	return return_dict
+
+
+def process_shots(shot_df: pd.DataFrame, penalty_dict: Dict) -> pd.DataFrame:
+	""" This function processes the shots data for a game
+	to separate penalty and non-penalty shots
+
+	@params shot_df (DataFrame): DataFrame with shot
+		data
+	@params penalty_dict (dict): Dictionary containing fouls
+		committed, time spent in the penalty, and FT
+		surrendered for each team in a game
+
+	Returns:
+
+		- penalty_df (DataFrame): DataFrame containing shots taken in the
+			penalty by either team
+		- non_penalty_df (DataFrame): DataFrame containing shots taken in the
+			non-penalty by either team
+	"""
+
+	# Initialize features and variables needed
+	max_period = max(shot_df["PERIOD"])
+
+	teams = list(penalty_dict.keys())
+	penalty_df = pd.DataFrame()
+	non_penalty_df = pd.DataFrame()
+	for team in teams:
+		# Find the opponent
+		other_team = [x for x in teams if x != team][0]
+		team_dict = penalty_dict[team]
+		other_team_dict = penalty_dict[other_team]
+
+		for periods in range(1, max_period + 1):
+			# If the team enters the penalty in a period, the "other team" will
+			# have an entry in its penalty dictionary. If not, the dictionary
+			# will have no  entry 
+			if periods in other_team_dict["game_event"]:
+				event_num = other_team_dict["game_event"][periods]
+				# Separate into penalty and non-penalty shots
+				p_df = shot_df[(shot_df["TEAM_ID"]==team) &
+							   (shot_df["PERIOD"]==periods) &
+							   (shot_df["GAME_EVENT_ID"] >= event_num)]
+				np_df = shot_df[(shot_df["TEAM_ID"]==team) &
+							    (shot_df["PERIOD"]==periods) &
+							    (shot_df["GAME_EVENT_ID"] < event_num)]
+
+				penalty_df = pd.concat([penalty_df, p_df])
+				non_penalty_df = pd.concat([non_penalty_df, np_df])
+			else:
+				event_num = None
+				np_df = shot_df[(shot_df["TEAM_ID"]==team) &
+							    (shot_df["PERIOD"]==periods)]
+				non_penalty_df = pd.concat([non_penalty_df, np_df])
+
+	return penalty_df, non_penalty_df
 
 
 def process_pbp(pbp_df: pd.DataFrame, penalty_dict: Dict, home_id: int) -> pd.DataFrame:
@@ -704,16 +794,21 @@ def process_pbp(pbp_df: pd.DataFrame, penalty_dict: Dict, home_id: int) -> pd.Da
 									"period": [periods],
 									"off_poss_np": [rating_dict["off_rating"]["no_penalty"]["poss"]],
 									"off_points_np": [rating_dict["off_rating"]["no_penalty"]["points"]],
+									"off_tov_np": [rating_dict["off_rating"]["no_penalty"]["tov"]],
 									"off_poss_p": [rating_dict["off_rating"]["penalty"]["poss"]],
-									"off_points_p": [rating_dict["off_rating"]["penalty"]["points"]],})
+									"off_points_p": [rating_dict["off_rating"]["penalty"]["points"]],
+									"off_tov_p": [rating_dict["off_rating"]["penalty"]["tov"]],})
 			full_df = pd.concat([full_df, temp_df])
 
 	# Aggregate data over each period
 	team_df = pd.DataFrame(full_df.groupby("team_id")[["off_poss_p",
 													   "off_points_p",
+													   "off_tov_p",
 													   "off_poss_np",
-													   "off_points_np"]].agg(["sum"])).reset_index()
-	team_df.columns = ["team_id", "off_poss_p", "off_points_p", "off_poss_np", "off_points_np",]
+													   "off_points_np",
+													   "off_tov_np"]].agg(["sum"])).reset_index()
+	team_df.columns = ["team_id", "off_poss_p", "off_points_p", "off_tov_p",
+					   "off_poss_np", "off_points_np", "off_tov_np"]
 
 	# Store points and possessions inside and outside of the penalty for a team
 	# on the offensive and defensive side of the ball
@@ -723,24 +818,32 @@ def process_pbp(pbp_df: pd.DataFrame, penalty_dict: Dict, home_id: int) -> pd.Da
 						 team_df[team_df["team_id"]==teams[1]]["off_points_p"].iloc[0],],
 		"off_poss_p": [team_df[team_df["team_id"]==teams[0]]["off_poss_p"].iloc[0],
 						 team_df[team_df["team_id"]==teams[1]]["off_poss_p"].iloc[0],],
+		"off_tov_p": [team_df[team_df["team_id"]==teams[0]]["off_tov_p"].iloc[0],
+						 team_df[team_df["team_id"]==teams[1]]["off_tov_p"].iloc[0],],
 		"def_points_p": [team_df[team_df["team_id"]==teams[1]]["off_points_p"].iloc[0],
 						 team_df[team_df["team_id"]==teams[0]]["off_points_p"].iloc[0],],
 		"def_poss_p": [team_df[team_df["team_id"]==teams[1]]["off_poss_p"].iloc[0],
 						 team_df[team_df["team_id"]==teams[0]]["off_poss_p"].iloc[0],],
+		"def_tov_p": [team_df[team_df["team_id"]==teams[1]]["off_tov_p"].iloc[0],
+						 team_df[team_df["team_id"]==teams[0]]["off_tov_p"].iloc[0],],
 		"off_points_np": [team_df[team_df["team_id"]==teams[0]]["off_points_np"].iloc[0],
 						 team_df[team_df["team_id"]==teams[1]]["off_points_np"].iloc[0],],
 		"off_poss_np": [team_df[team_df["team_id"]==teams[0]]["off_poss_np"].iloc[0],
 						 team_df[team_df["team_id"]==teams[1]]["off_poss_np"].iloc[0],],
+		"off_tov_np": [team_df[team_df["team_id"]==teams[0]]["off_tov_np"].iloc[0],
+						 team_df[team_df["team_id"]==teams[1]]["off_tov_np"].iloc[0],],
 		"def_points_np": [team_df[team_df["team_id"]==teams[1]]["off_points_np"].iloc[0],
 						 team_df[team_df["team_id"]==teams[0]]["off_points_np"].iloc[0],],
 		"def_poss_np": [team_df[team_df["team_id"]==teams[1]]["off_poss_np"].iloc[0],
-						 team_df[team_df["team_id"]==teams[0]]["off_poss_np"].iloc[0],]
+						 team_df[team_df["team_id"]==teams[0]]["off_poss_np"].iloc[0],],
+		"def_tov_np": [team_df[team_df["team_id"]==teams[1]]["off_tov_np"].iloc[0],
+						 team_df[team_df["team_id"]==teams[0]]["off_tov_np"].iloc[0],]
 		})
 
 	return rating_df
 
 
-def loop_through_games(start_date: str, end_date: str, league: str) -> pd.DataFrame:
+def loop_through_games(start_date: str, end_date: str, league: str, season: str) -> pd.DataFrame:
 	""" This function loops through dates and extracts
 	team foul and penalty data for each game
 
@@ -749,14 +852,23 @@ def loop_through_games(start_date: str, end_date: str, league: str) -> pd.DataFr
 	@param end_date (str): Data on which games of interest end
 		(YYYY-MM-DD)
 	@param league (str): One of NBA, WNBA, or G
+	@param season (str): Season in YYYY-ZZ format for NBA or G-League,
+		YYYY for WNBA
 
 	Returns:
 
 		- total_df (DataFrame): DataFrame containing team performance
 			and team penalty information
+		- penalty_df (DataFrame): DataFrame containing shots taken in the
+			penalty by either team
+		- non_penalty_df (DataFrame): DataFrame containing shots taken in the
+			non-penalty by either team
 	"""
 
 	total_df = pd.DataFrame()
+	penalty_df = pd.DataFrame()
+	non_penalty_df = pd.DataFrame()
+
 	league_id = LEAGUE_ID_MAP[league]
 
 	for x in pd.date_range(start=start_date, end=end_date):
@@ -770,22 +882,32 @@ def loop_through_games(start_date: str, end_date: str, league: str) -> pd.DataFr
 		for game_id in game_id_list:
 			print("Processing: " + str(game_id))
 			home_id, away_id, home_winner, line_score = pull_team_ids(game_id)
-			time.sleep(4) # Give the NBA API a break
+			time.sleep(3) # Give the NBA API a break
 			if home_winner is not None:
 				# Track team fouls
 				penalty_dict, winner_id, pbp_df = team_foul_tracker(game_id, home_id, away_id, home_winner)
-				# Extract team foul data of interest
-				full_df = process_output(penalty_dict, winner_id, league_id)
-				# Extract performance in/out of penalty
-				rating_df = process_pbp(pbp_df, penalty_dict, home_id)
+				if pbp_df is not None:
+					time.sleep(3)
+					# Pull shot data
+					shot_df = get_shot_data(season, game_id, league_id)
+					# Split shots into those in the penalty and those outside
+					penalty_shots_df, non_penalty_shots_df = process_shots(shot_df, penalty_dict)
+					# Extract team foul data of interest
+					full_df = process_output(penalty_dict, winner_id, league_id)
+					# Extract performance in/out of penalty
+					rating_df = process_pbp(pbp_df, penalty_dict, home_id)
 
-				# Store relevant information
-				full_df["game_id"] = [game_id]*len(full_df)
-				rating_df["game_id"] = [game_id]*len(rating_df)
-				full_df = full_df.merge(rating_df, on=["game_id", "team_id"])
-				total_df = pd.concat([total_df, full_df])
+					# Store relevant information
+					full_df["game_id"] = [game_id]*len(full_df)
+					rating_df["game_id"] = [game_id]*len(rating_df)
+					full_df = full_df.merge(rating_df, on=["game_id", "team_id"])
 
-	return total_df
+					# Concatenate corresponding DataFrames
+					total_df = pd.concat([total_df, full_df])
+					penalty_df = pd.concat([penalty_df, penalty_shots_df])
+					non_penalty_df = pd.concat([non_penalty_df, non_penalty_shots_df])
+
+	return total_df, penalty_df, non_penalty_df
 
 
 def parse_args():
@@ -798,6 +920,8 @@ def parse_args():
 		- args.end_date (str): Data on which games of interest end
 			(YYYY-MM-DD)
 		- args.league (str): League of interest (WNBA, NBA, or G)
+		- args.season (str): Season in YYYY-ZZ format for NBA or G-League,
+			YYYY for WNBA
 	"""
 
 	parser = argparse.ArgumentParser(description='Start and end dates')
@@ -807,21 +931,25 @@ def parse_args():
 	                    help='Date on which games of interest end (YYYY-MM-DD)')
 	parser.add_argument('--league',
 	                    help='One of NBA, WNBA, or G corresponding to the league of interest')
+	parser.add_argument('--season',
+	                    help='Season in YYYY-ZZ format for NBA or G-League, YYYY for WNBA')
 
 	args = parser.parse_args()
-	if not (args.start_date and args.end_date and args.league):
-		raise Exception("Invalid args: must provde --start_date, --end_date, --league")
+	if not (args.start_date and args.end_date and args.league and args.season):
+		raise Exception("Invalid args: must provde --start_date, --end_date, --league, --season")
 
-	return args.start_date, args.end_date, args.league
+	return args.start_date, args.end_date, args.league, args.season
 
 
 def main():
 	""" main, ya cowboy
 	"""
 
-	start_date, end_date, league = parse_args()
-	total_df = loop_through_games(start_date, end_date, league)
+	start_date, end_date, league, season = parse_args()
+	total_df, penalty_df, non_penalty_df = loop_through_games(start_date, end_date, league, season)
 	total_df.to_csv("team_fouls_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
+	penalty_df.to_csv("penalty_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
+	non_penalty_df.to_csv("non_penalty_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
 
 
 if __name__ == "__main__":
