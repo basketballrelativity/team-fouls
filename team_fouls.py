@@ -11,6 +11,7 @@ from typing import Union, Dict, List
 import time
 import re
 import argparse
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -472,6 +473,8 @@ def team_foul_tracker(
 				# Reset foul information if the period turns over
 				penalty_dict[home_id]["fouls"][period] = home_dict["fouls"]
 				penalty_dict[away_id]["fouls"][period] = away_dict["fouls"]
+				penalty_dict[home_id]["time_to_foul"][period][home_dict["fouls"] + 1] = home_dict["last_foul_time"]
+				penalty_dict[away_id]["time_to_foul"][period][away_dict["fouls"] + 1] = away_dict["last_foul_time"]
 				home_dict, away_dict, penalty_dict, period = reset_status_variables(home_id, away_id, period, penalty_dict, league_id)
 
 
@@ -485,6 +488,8 @@ def team_foul_tracker(
 		# Store team foul totals for final period
 		penalty_dict[home_id]["fouls"][period] = home_dict["fouls"]
 		penalty_dict[away_id]["fouls"][period] = away_dict["fouls"]
+		penalty_dict[home_id]["time_to_foul"][period][home_dict["fouls"] + 1] = home_dict["last_foul_time"]
+		penalty_dict[away_id]["time_to_foul"][period][away_dict["fouls"] + 1] = away_dict["last_foul_time"]
 
 		# Find ID of winning team
 		winner_id = home_id if home_winner else away_id
@@ -858,9 +863,7 @@ def process_pbp(pbp_df: pd.DataFrame, penalty_dict: Dict, home_id: int) -> pd.Da
 		"def_poss_np": [team_df[team_df["team_id"]==teams[1]]["off_poss_np"].iloc[0],
 						 team_df[team_df["team_id"]==teams[0]]["off_poss_np"].iloc[0],],
 		"def_tov_np": [team_df[team_df["team_id"]==teams[1]]["off_tov_np"].iloc[0],
-						 team_df[team_df["team_id"]==teams[0]]["off_tov_np"].iloc[0],],
-		"time_to_foul": [penalty_dict[teams[0]]["time_to_foul"],
-						 penalty_dict[teams[1]]["time_to_foul"]]
+						 team_df[team_df["team_id"]==teams[0]]["off_tov_np"].iloc[0],]
 		})
 
 	return rating_df
@@ -893,7 +896,7 @@ def loop_through_games(start_date: str, end_date: str, league: str, season: str)
 	non_penalty_df = pd.DataFrame()
 
 	league_id = LEAGUE_ID_MAP[league]
-
+	time_dict = {}
 	for x in pd.date_range(start=start_date, end=end_date):
 		# Convert dates into properly formatted strings
 		date_obj = x.date()
@@ -904,6 +907,7 @@ def loop_through_games(start_date: str, end_date: str, league: str, season: str)
 		# Looping through games on each data
 		for game_id in game_id_list:
 			print("Processing: " + str(game_id))
+			time_dict[game_id] = {}
 			home_id, away_id, home_winner, line_score = pull_team_ids(game_id)
 			time.sleep(3) # Give the NBA API a break
 			if home_winner is not None:
@@ -924,13 +928,16 @@ def loop_through_games(start_date: str, end_date: str, league: str, season: str)
 					full_df["game_id"] = [game_id]*len(full_df)
 					rating_df["game_id"] = [game_id]*len(rating_df)
 					full_df = full_df.merge(rating_df, on=["game_id", "team_id"])
+					teams = list(set(full_df["team_id"]))
+					time_dict[game_id][teams[0]] = penalty_dict[teams[0]]["time_to_foul"]
+					time_dict[game_id][teams[1]] = penalty_dict[teams[1]]["time_to_foul"]
 
 					# Concatenate corresponding DataFrames
 					total_df = pd.concat([total_df, full_df])
 					penalty_df = pd.concat([penalty_df, penalty_shots_df])
 					non_penalty_df = pd.concat([non_penalty_df, non_penalty_shots_df])
 
-	return total_df, penalty_df, non_penalty_df
+	return total_df, penalty_df, non_penalty_df, time_dict
 
 
 def parse_args():
@@ -969,10 +976,12 @@ def main():
 	"""
 
 	start_date, end_date, league, season = parse_args()
-	total_df, penalty_df, non_penalty_df = loop_through_games(start_date, end_date, league, season)
+	total_df, penalty_df, non_penalty_df, time_dict = loop_through_games(start_date, end_date, league, season)
 	total_df.to_csv("team_fouls_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
 	penalty_df.to_csv("penalty_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
 	non_penalty_df.to_csv("non_penalty_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
+	with open("time_to_foul_" + start_date + "_to_" + end_date + "_" + league + ".pkl", 'wb') as outp:
+		pickle.dump(time_dict, outp)
 
 
 if __name__ == "__main__":
