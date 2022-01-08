@@ -7,7 +7,7 @@ along with any free throws resulting from additional
 fouls accumulated in the penalty
 """
 
-from typing import Union, Dict, List
+from typing import Union, Dict
 import time
 import re
 import argparse
@@ -16,240 +16,8 @@ import pickle
 import numpy as np
 import pandas as pd
 
-from py_ball import playbyplay, boxscore, scoreboard, player
-
-
-# Header information needed for py_ball
-HEADERS = {'Connection': 'keep-alive',
-           'Host': 'stats.nba.com',
-           'Origin': 'http://stats.nba.com',
-           'Upgrade-Insecure-Requests': '1',
-           'Referer': 'stats.nba.com',
-           'x-nba-stats-origin': 'stats',
-           'x-nba-stats-token': 'true',
-           'Accept-Language': 'en-US,en;q=0.9',
-           "X-NewRelic-ID": "VQECWF5UChAHUlNTBwgBVw==",
-           'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6)' +\
-                         ' AppleWebKit/537.36 (KHTML, like Gecko)' + \
-                         ' Chrome/81.0.4044.129 Safari/537.36'}
-
-
-# These indicate EVENTMSGACTIONTYPE values that increment team fouls
-TEAM_FOUL_INDICATORS = [1, 2, 3, 5, 6, 9, 14, 15, 26, 27, 28, 29]
-# These indicate EVENTMSGACTIONTYPE values that would result in FTAs only
-# if a team is in the penalty
-NON_SHOOTING_FOULS = [1, 3, 27, 28]
-
-# League IDs
-LEAGUE_ID_MAP = {"NBA": "00", "WNBA": "10", "G": "20"}
-QUARTER_LENGTH = {"00": 720, "10": 600, "20": 720} # Quarter length in seconds
-OT_LENGTH = {"00": 300, "10": 300, "20": 120} # OT period length in seconds
-
-TWO_MINUTES = 120 # Seconds
-QUARTERS = 4
-REG_GAME_LENGTH = 720*QUARTERS # Game length in seconds
-THREE_QUARTER_LENGTH = 720*(QUARTERS - 1) # Length of three quarters in seconds
-
-
-def get_shot_data(season: str, game_id: str, league_id: str) -> List:
-	""" get_game_ids returns the NBA game IDs
-	that take place on the provided date
-
-	@param season (str): Season in YYYY-ZZ format for NBA
-		and G-League, YYYY format for WNBA
-	@param game_id (str): Unique identifier for the game
-	@param league_id (str): One of '00' (NBA), '10' (WNBA),
-		'20' (G League)
-
-	Returns:
-
-		- shot_df (DataFrame): DataFrame containing all
-			shot data
-	"""
-
-	shots = player.Player(headers=HEADERS,
-                          endpoint='shotchartdetail',
-                          league_id=league_id,
-                          player_id='0',
-                          game_id=game_id,
-                          season=season)
-
-	shot_df = pd.DataFrame(shots.data['Shot_Chart_Detail'])
-
-	return shot_df
-
-
-def get_game_ids(date: str, league_id: str) -> List:
-	""" get_game_ids returns the NBA game IDs
-	that take place on the provided date
-
-	@param date (str): Date in MM/DD/YYYY format
-	@param league_id (str): One of '00' (NBA), '10' (WNBA),
-		'20' (G League)
-
-	Returns:
-
-		- game_id_list (list): List of game IDs
-	"""
-
-	scores = scoreboard.ScoreBoard(headers=HEADERS,
-                               	   endpoint='scoreboardv2',
-                                   league_id=league_id,
-                               	   game_date=date,
-                               	   day_offset='0')
-
-	games = scores.data['GameHeader']
-	game_id_list = [x['GAME_ID'] for x in games]
-
-	return game_id_list
-
-
-def pull_team_ids(game_id: str) -> Union[int, int, bool, List]:
-	""" This function pulls the JSON file for a
-	game's play-by-play data and converts it into
-	a Pandas DataFrame
-
-	@param game_id (str): 10-digit string \
-        that represents a unique game. The format is two leading zeroes, \
-        followed by a season indicator number ('1' for preseason, \
-        '2' for regular season, '4' for the post-season), \
-        then the trailing digits of the season in which the game \
-        took place (e.g. '17' for the 2017-18 season). The following \
-        5 digits increment from '00001' in order as the season progresses. \
-        For example, '0021600001' is the **game_id** of the first game \
-        of the 2016-17 NBA regular season.
-
-	Returns:
-
-		- home_id (int): 10-digit integer that uniquely identifies the
-			home team
-		- away_id (int): 10-digit integer that uniquely identifies the
-			away team
-		- home_winner (bool): Boolean indicating whether the home team
-			won or not
-		- line (list): List containing line score information by team
-	"""
-
-	box = boxscore.BoxScore(headers=HEADERS, endpoint='boxscoresummaryv2', game_id=game_id)
-	metadata = box.data["GameSummary"]
-	line = box.data["LineScore"]
-	home_id, away_id = metadata[0]["HOME_TEAM_ID"], metadata[0]["VISITOR_TEAM_ID"]
-
-	# Find winner by comparing point totals
-	if line[0]["TEAM_ID"] == home_id:
-		home_points = line[0]["PTS"]
-		away_points = line[1]["PTS"]
-	else:
-		home_points = line[1]["PTS"]
-		away_points = line[0]["PTS"]
-
-	if pd.notnull(home_points) and pd.notnull(away_points):
-		home_winner = home_points > away_points
-	else:
-		home_winner = None
-
-	return home_id, away_id, home_winner, line
-
-
-def pull_pbp_file(game_id: str) -> pd.DataFrame:
-	""" This function pulls the JSON file for a
-	game's play-by-play data and converts it into
-	a Pandas DataFrame
-
-	@param game_id (str): 10-digit string \
-        that represents a unique game. The format is two leading zeroes, \
-        followed by a season indicator number ('1' for preseason, \
-        '2' for regular season, '4' for the post-season), \
-        then the trailing digits of the season in which the game \
-        took place (e.g. '17' for the 2017-18 season). The following \
-        5 digits increment from '00001' in order as the season progresses. \
-        For example, '0021600001' is the **game_id** of the first game \
-        of the 2016-17 NBA regular season.
-
-	Returns:
-
-		- pbp_df (DataFrame): DataFrame containing play-by-play
-			data for the game corresponding to game_id
-	"""
-
-	plays = playbyplay.PlayByPlay(headers=HEADERS, endpoint='playbyplayv2', game_id=game_id)
-	pbp_df = pd.DataFrame(plays.data['PlayByPlay'])
-
-	return pbp_df
-
-
-def str_to_time(time_str: str, period: int) -> int:
-    """ This function converts a period and time to seconds remaining
-    in the quarter
-
-
-	@param time_str (str): Game time in MM:SS format
-	@param period (int): Game quarter (5 is OT1, 6 is OT2, etc.)
-
-	Returns
-
-		- seconds_left_period (int): Seconds left in the given period
-    """
-
-    split_time = time_str.split(':')
-    seconds_left_period = int(split_time[0]) * 60 + int(split_time[1])
-
-    return seconds_left_period
-
-
-def add_fouls(foul_dict: Dict, period: int, quarter_time: int, team_id: int, penalty_dict: Dict) -> Dict:
-	""" This function adds fouls to a team's total and their
-	L2M total if applicable
-
-	@param foul_dict (dict): Dictionary containing the number of fouls
-		and L2M fouls a team has accumulated
-	@param period (int): Game quarter (5 is OT1, 6 is OT2, etc.)
-	@param quarter_time (int): Time remaining in the quarter
-	@param team_id (int): Unique identifier of team committing a foul
-	@param penalty_dict (dict): Dictionary containing team foul
-		related data
-
-	Returns:
-
-		- foul_dict (int): Incremented number of team fouls
-			and L2M fouls in the quarter
-		- penalty_dict (dict): Dictionary containing updated
-			team foul related data
-	"""
-
-	foul_dict["fouls"] += 1
-	penalty_dict[team_id]["time_to_foul"][period][foul_dict["fouls"]] = foul_dict["last_foul_time"] - quarter_time
-	foul_dict["last_foul_time"] = quarter_time
-	if quarter_time <= TWO_MINUTES:
-		foul_dict["l2m"] += 1
-
-	return foul_dict, penalty_dict
-
-
-def is_in_penalty(foul_dict: Dict, period: int, penalty: bool) -> Union[bool, int]:
-	""" This function determines if a team is in the penalty
-
-	@param foul_dict (dict): Dictionary containing the number of fouls
-		and L2M fouls a team has accumulated
-	@param period (int): Game quarter (5 is OT1, 6 is OT2, etc.)
-	@param penalty (bool): Boolean indicating whether the
-		team is in the penalty
-
-	Returns:
-
-		- penalty (bool): Boolean indicating whether the
-			team is in the penalty
-		- period_fouls (int): Number of fouls to reach the penalty
-	"""
-
-	period_fouls = 4 if period <= 4 else 3
-
-	if foul_dict["fouls"] >= period_fouls or foul_dict["l2m"] >= 1:
-		penalty = True
-	else:
-		penalty = False
-
-	return penalty, period_fouls
+import team_fouls_utils as tf_utils
+import team_fouls_constants as tf_const
 
 
 def process_foul_df(pbp_df: pd.DataFrame) -> pd.DataFrame:
@@ -312,8 +80,8 @@ def initialize_status_variables(home_id: int, away_id: int, period: int, league_
 			surrendered for each team in a game
 	"""
 
-	home_dict = {"fouls": 0, "l2m": 0, "last_foul_time": QUARTER_LENGTH[league_id], "penalty": False}
-	away_dict = {"fouls": 0, "l2m": 0, "last_foul_time": QUARTER_LENGTH[league_id], "penalty": False}
+	home_dict = {"fouls": 0, "l2m": 0, "last_foul_time": tf_const.QUARTER_LENGTH[league_id], "penalty": False}
+	away_dict = {"fouls": 0, "l2m": 0, "last_foul_time": tf_const.QUARTER_LENGTH[league_id], "penalty": False}
 	penalty_dict = {}
 	penalty_dict[home_id] = {}
 	penalty_dict[away_id] = {}
@@ -362,7 +130,7 @@ def reset_status_variables(home_id: int, away_id: int, period: int, penalty_dict
 			surrendered for each team in a game
 		- period (int): Period incremented by one
 	"""
-	last_foul_time = QUARTER_LENGTH[league_id] if period <= 4 else OT_LENGTH[league_id]
+	last_foul_time = tf_const.QUARTER_LENGTH[league_id] if period <= 4 else tf_const.OT_LENGTH[league_id]
 
 	home_dict = {"fouls": 0, "l2m": 0, "last_foul_time": last_foul_time, "penalty": False}
 	away_dict = {"fouls": 0, "l2m": 0, "last_foul_time": last_foul_time, "penalty": False}
@@ -403,14 +171,14 @@ def update_status_variables(
 	"""
 
 	# Time remaining in quarter
-	time_remaining = str_to_time(play["PCTIMESTRING"], period)
+	time_remaining = tf_utils.str_to_time(play["PCTIMESTRING"], period)
 
 	# Increment fouls and check if team is in the penalty
-	foul_dict, penalty_dict = add_fouls(foul_dict, period, time_remaining, team_id, penalty_dict)
-	check_penalty, penalty_fouls = is_in_penalty(foul_dict, period, time_remaining)
+	foul_dict, penalty_dict = tf_utils.add_fouls(foul_dict, period, time_remaining, team_id, penalty_dict)
+	check_penalty, penalty_fouls = tf_utils.is_in_penalty(foul_dict, period, time_remaining)
 
 	# Increment two FTA if a non-shooting team foul occurs for a team in the penalty
-	if foul_dict["penalty"] and play["EVENTMSGACTIONTYPE"] in NON_SHOOTING_FOULS:
+	if foul_dict["penalty"] and play["EVENTMSGACTIONTYPE"] in tf_const.NON_SHOOTING_FOULS:
 		penalty_dict[team_id]["free_throws"][period] += 2
 
 	# Flip a team into the penalty if they aren't already there, storing the
@@ -457,7 +225,7 @@ def team_foul_tracker(
 		data
 	"""
 
-	pbp_df = pull_pbp_file(game_id)
+	pbp_df = tf_utils.pull_pbp_file(game_id)
 
 	if len(pbp_df) > 0:
 		# Isolate fouls
@@ -479,7 +247,7 @@ def team_foul_tracker(
 
 
 			# Update team fouls and penalty status for the corresponding team
-			if row["EVENTMSGACTIONTYPE"] in TEAM_FOUL_INDICATORS:
+			if row["EVENTMSGACTIONTYPE"] in tf_const.TEAM_FOUL_INDICATORS:
 				if row["PLAYER1_TEAM_ID"] == home_id:
 					home_dict, penalty_dict = update_status_variables(row, period, home_id, home_dict, penalty_dict)
 				else:
@@ -519,15 +287,15 @@ def process_output(penalty_dict: Dict, winner_id: bool, league_id: str) -> pd.Da
 	teams = list(penalty_dict.keys())
 	full_df = pd.DataFrame()
 
-	quarter_time = QUARTER_LENGTH[league_id]
-	ot_time = OT_LENGTH[league_id]
+	quarter_time = tf_const.QUARTER_LENGTH[league_id]
+	ot_time = tf_const.OT_LENGTH[league_id]
 	for team in teams:
 		# Find the opponent
 		other_team = [x for x in teams if x != team][0]
 		team_dict = penalty_dict[team]
 		other_team_dict = penalty_dict[other_team]
 
-		game_length = QUARTERS * quarter_time + ot_time * (len(team_dict["fouls"]) - QUARTERS)
+		game_length = tf_const.QUARTERS * quarter_time + ot_time * (len(team_dict["fouls"]) - tf_const.QUARTERS)
 		
 		# Calculate team foul related data to export. Because of the way team_foul_tracker is constructed,
 		# the time spent in the penalty, fouls accumulated, and FTs surrendered is for a team's defense.
@@ -537,17 +305,17 @@ def process_output(penalty_dict: Dict, winner_id: bool, league_id: str) -> pd.Da
 		temp_df = pd.DataFrame({"team_id": [team],
 								"game_length": [game_length],
 								"fouls_committed": [np.sum([team_dict["fouls"][x] for x in team_dict["fouls"]])],
-								"fouls_3q_committed": [np.sum([team_dict["fouls"][x] for x in team_dict["fouls"] if x < QUARTERS])],
+								"fouls_3q_committed": [np.sum([team_dict["fouls"][x] for x in team_dict["fouls"] if x < tf_const.QUARTERS])],
 								"opp_tib": [np.sum([team_dict["time"][x] for x in team_dict["time"]])],
-								"opp_3q_tib": [np.sum([team_dict["time"][x] for x in team_dict["time"] if x < QUARTERS])],
+								"opp_3q_tib": [np.sum([team_dict["time"][x] for x in team_dict["time"] if x < tf_const.QUARTERS])],
 								"ft_allowed": [np.sum([team_dict["free_throws"][x] for x in team_dict["free_throws"]])],
-								"ft_3q_allowed": [np.sum([team_dict["free_throws"][x] for x in team_dict["free_throws"] if x < QUARTERS])],
+								"ft_3q_allowed": [np.sum([team_dict["free_throws"][x] for x in team_dict["free_throws"] if x < tf_const.QUARTERS])],
 								"fouls_against": [np.sum([other_team_dict["fouls"][x] for x in other_team_dict["fouls"]])],
-								"fouls_3q_against": [np.sum([other_team_dict["fouls"][x] for x in other_team_dict["fouls"] if x < QUARTERS])],
+								"fouls_3q_against": [np.sum([other_team_dict["fouls"][x] for x in other_team_dict["fouls"] if x < tf_const.QUARTERS])],
 								"own_tib": [np.sum([other_team_dict["time"][x] for x in other_team_dict["time"]])],
-								"own_3q_tib": [np.sum([other_team_dict["time"][x] for x in other_team_dict["time"] if x < QUARTERS])],
+								"own_3q_tib": [np.sum([other_team_dict["time"][x] for x in other_team_dict["time"] if x < tf_const.QUARTERS])],
 								"ft_gained": [np.sum([other_team_dict["free_throws"][x] for x in other_team_dict["free_throws"]])],
-								"ft_3q_gained": [np.sum([other_team_dict["free_throws"][x] for x in other_team_dict["free_throws"] if x < QUARTERS])],
+								"ft_3q_gained": [np.sum([other_team_dict["free_throws"][x] for x in other_team_dict["free_throws"] if x < tf_const.QUARTERS])],
 								"win": [1 if team == winner_id else 0]})
 		full_df = pd.concat([full_df, temp_df])
 
@@ -556,8 +324,8 @@ def process_output(penalty_dict: Dict, winner_id: bool, league_id: str) -> pd.Da
 	full_df["own_percent_tib"] = full_df["own_tib"] / full_df["game_length"]
 
 	# Normalizing 3q time-in-bonus by three-quarters length
-	full_df["opp_percent_3q_tib"] = full_df["opp_3q_tib"] / (quarter_time * (QUARTERS - 1))
-	full_df["own_percent_3q_tib"] = full_df["own_3q_tib"] / (quarter_time * (QUARTERS - 1))
+	full_df["opp_percent_3q_tib"] = full_df["opp_3q_tib"] / (quarter_time * (tf_const.QUARTERS - 1))
+	full_df["own_percent_3q_tib"] = full_df["own_3q_tib"] / (quarter_time * (tf_const.QUARTERS - 1))
 
 	return full_df
 
@@ -895,28 +663,28 @@ def loop_through_games(start_date: str, end_date: str, league: str, season: str)
 	penalty_df = pd.DataFrame()
 	non_penalty_df = pd.DataFrame()
 
-	league_id = LEAGUE_ID_MAP[league]
+	league_id = tf_const.LEAGUE_ID_MAP[league]
 	time_dict = {}
 	for x in pd.date_range(start=start_date, end=end_date):
 		# Convert dates into properly formatted strings
 		date_obj = x.date()
 		date_str = date_obj.strftime("%m/%d/%Y")
 		print("Pulling " + date_str + " games")
-		game_id_list = get_game_ids(date_str, league_id)
+		game_id_list = tf_utils.get_game_ids(date_str, league_id)
 
 		# Looping through games on each data
 		for game_id in game_id_list:
 			print("Processing: " + str(game_id))
 			time_dict[game_id] = {}
-			home_id, away_id, home_winner, line_score = pull_team_ids(game_id)
+			home_id, away_id, home_winner, line_score = tf_utils.pull_team_ids(game_id)
 			time.sleep(3) # Give the NBA API a break
-			if home_winner is not None:
+			if home_winner is not None and game_id[0:3] != "003":
 				# Track team fouls
 				penalty_dict, winner_id, pbp_df = team_foul_tracker(game_id, home_id, away_id, home_winner, league_id)
 				if pbp_df is not None:
 					time.sleep(3)
 					# Pull shot data
-					shot_df = get_shot_data(season, game_id, league_id)
+					shot_df = tf_utils.get_shot_data(season, game_id, league_id)
 					# Split shots into those in the penalty and those outside
 					penalty_shots_df, non_penalty_shots_df = process_shots(shot_df, penalty_dict)
 					# Extract team foul data of interest
