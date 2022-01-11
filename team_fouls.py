@@ -684,9 +684,9 @@ def loop_through_games(start_date: str, end_date: str, league: str, season: str)
 				if pbp_df is not None:
 					time.sleep(3)
 					# Pull shot data
-					shot_df = tf_utils.get_shot_data(season, game_id, league_id)
+					# shot_df = tf_utils.get_shot_data(season, game_id, league_id)
 					# Split shots into those in the penalty and those outside
-					penalty_shots_df, non_penalty_shots_df = process_shots(shot_df, penalty_dict)
+					# penalty_shots_df, non_penalty_shots_df = process_shots(shot_df, penalty_dict)
 					# Extract team foul data of interest
 					full_df = process_output(penalty_dict, winner_id, league_id)
 					# Extract performance in/out of penalty
@@ -702,8 +702,8 @@ def loop_through_games(start_date: str, end_date: str, league: str, season: str)
 
 					# Concatenate corresponding DataFrames
 					total_df = pd.concat([total_df, full_df])
-					penalty_df = pd.concat([penalty_df, penalty_shots_df])
-					non_penalty_df = pd.concat([non_penalty_df, non_penalty_shots_df])
+					# penalty_df = pd.concat([penalty_df, penalty_shots_df])
+					# non_penalty_df = pd.concat([non_penalty_df, non_penalty_shots_df])
 
 	return total_df, penalty_df, non_penalty_df, time_dict
 
@@ -746,11 +746,11 @@ def main():
 	start_date, end_date, league, season = parse_args()
 	total_df, penalty_df, non_penalty_df, time_dict = loop_through_games(start_date, end_date, league, season)
 	total_df.to_csv("team_fouls_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
-	penalty_df.to_csv("penalty_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
-	non_penalty_df.to_csv("non_penalty_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
+	# penalty_df.to_csv("penalty_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
+	# non_penalty_df.to_csv("non_penalty_" + start_date + "_to_" + end_date + "_" + league + ".csv", index=False)
 	with open("time_to_foul_" + start_date + "_to_" + end_date + "_" + league + ".pkl", 'wb') as outp:
 		pickle.dump(time_dict, outp)
 
 
-if __name__ == "__main__":
-	main()
+# if __name__ == "__main__":
+# 	main()
