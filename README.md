@@ -3,10 +3,10 @@ Exploration and modeling of team foul accumulation in professional basketball
 
 ## Instructions
 
-`team_fouls.py` ingests a `--start_date` and `--end_date` command line argument to loop through NBA games played between those dates (inclusive). For each game, the script iterates over play-by-play data and extracts data related to team fouls accumulated by team and quarter, along with team performance in and out of the penalty. The output is a `.csv` file written to the local directory in the format `team_fouls_[start_date]_to_[end_date].csv`. Here's an example of how to run the script:
+`team_fouls.py` ingests `--start_date`, `--end_date`, `--league`, and `--season` command line arguments to loop through NBA, WNBA, or G-League games played between those dates (inclusive). For each game, the script iterates over play-by-play data and extracts data related to team fouls accumulated by team and quarter, along with team performance in and out of the penalty. The output is a `.csv` file written to the local directory in the format `team_fouls_[start_date]_to_[end_date].csv`. Here's an example of how to run the script:
 
 ```
-python team_fouls.py --start_date 2020-12-22 --end_date 2021-05-16
+python team_fouls.py --start_date 2020-12-22 --end_date 2021-05-16 --league NBA --season 2020-21
 ```
 
 The above would run through each game in the 2020-21 NBA regular season.
@@ -37,9 +37,13 @@ Team foul data by team and game is stored by season in the `data` folder. Here's
 - `game_id`: Unique identifier of the game
 - `off_points_p`: Points scored in the penalty
 - `off_poss_p`: Estimate of offensive possessions used in the penalty
+- `off_tov_p`: Estimate of turnovers in the penalty
 - `def_points_p`: Points allowed in the penalty
 - `def_poss_p`: Estimate of defensive possessions used in the penalty
+- `def_tov_p`: Estimate of turnovers caused in the penalty
 - `off_points_np`: Points scored outside of the penalty
 - `off_poss_np`: Estimate of offensive possessions used outside of the penalty
+- `off_tov_np`: Estimate of turnovers outside of the penalty
 - `def_points_np`: Points allowed outside of the penalty
 - `def_poss_np`: Estimate of defensive possessions used outside of the penalty
+- `def_tov_np`: Estimate of turnovers outside of the penalty
