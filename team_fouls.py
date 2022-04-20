@@ -674,36 +674,37 @@ def loop_through_games(start_date: str, end_date: str, league: str, season: str)
 
 		# Looping through games on each data
 		for game_id in game_id_list:
-			print("Processing: " + str(game_id))
-			time_dict[game_id] = {}
-			home_id, away_id, home_winner, line_score = tf_utils.pull_team_ids(game_id)
-			time.sleep(3) # Give the NBA API a break
-			if home_winner is not None and game_id[0:3] != "003":
-				# Track team fouls
-				penalty_dict, winner_id, pbp_df = team_foul_tracker(game_id, home_id, away_id, home_winner, league_id)
-				if pbp_df is not None:
-					time.sleep(3)
-					# Pull shot data
-					shot_df = tf_utils.get_shot_data(season, game_id, league_id)
-					# Split shots into those in the penalty and those outside
-					penalty_shots_df, non_penalty_shots_df = process_shots(shot_df, penalty_dict)
-					# Extract team foul data of interest
-					full_df = process_output(penalty_dict, winner_id, league_id)
-					# Extract performance in/out of penalty
-					rating_df = process_pbp(pbp_df, penalty_dict, home_id)
+			if game_id != "0022100727" or game_id == "0022100727":
+				print("Processing: " + str(game_id))
+				time_dict[game_id] = {}
+				home_id, away_id, home_winner, line_score = tf_utils.pull_team_ids(game_id)
+				time.sleep(3) # Give the NBA API a break
+				if home_winner is not None and game_id[0:3] != "003":
+					# Track team fouls
+					penalty_dict, winner_id, pbp_df = team_foul_tracker(game_id, home_id, away_id, home_winner, league_id)
+					if pbp_df is not None:
+						time.sleep(3)
+						# Pull shot data
+						shot_df = tf_utils.get_shot_data(season, game_id, league_id)
+						# Split shots into those in the penalty and those outside
+						penalty_shots_df, non_penalty_shots_df = process_shots(shot_df, penalty_dict)
+						# Extract team foul data of interest
+						full_df = process_output(penalty_dict, winner_id, league_id)
+						# Extract performance in/out of penalty
+						rating_df = process_pbp(pbp_df, penalty_dict, home_id)
 
-					# Store relevant information
-					full_df["game_id"] = [game_id]*len(full_df)
-					rating_df["game_id"] = [game_id]*len(rating_df)
-					full_df = full_df.merge(rating_df, on=["game_id", "team_id"])
-					teams = list(set(full_df["team_id"]))
-					time_dict[game_id][teams[0]] = penalty_dict[teams[0]]["time_to_foul"]
-					time_dict[game_id][teams[1]] = penalty_dict[teams[1]]["time_to_foul"]
+						# Store relevant information
+						full_df["game_id"] = [game_id]*len(full_df)
+						rating_df["game_id"] = [game_id]*len(rating_df)
+						full_df = full_df.merge(rating_df, on=["game_id", "team_id"])
+						teams = list(set(full_df["team_id"]))
+						time_dict[game_id][teams[0]] = penalty_dict[teams[0]]["time_to_foul"]
+						time_dict[game_id][teams[1]] = penalty_dict[teams[1]]["time_to_foul"]
 
-					# Concatenate corresponding DataFrames
-					total_df = pd.concat([total_df, full_df])
-					# penalty_df = pd.concat([penalty_df, penalty_shots_df])
-					# non_penalty_df = pd.concat([non_penalty_df, non_penalty_shots_df])
+						# Concatenate corresponding DataFrames
+						total_df = pd.concat([total_df, full_df])
+						penalty_df = pd.concat([penalty_df, penalty_shots_df])
+						non_penalty_df = pd.concat([non_penalty_df, non_penalty_shots_df])
 
 	return total_df, penalty_df, non_penalty_df, time_dict
 
