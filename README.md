@@ -47,3 +47,21 @@ Team foul data by team and game is stored by season in the `data` folder. Here's
 - `def_points_np`: Points allowed outside of the penalty
 - `def_poss_np`: Estimate of defensive possessions used outside of the penalty
 - `def_tov_np`: Estimate of turnovers outside of the penalty
+
+## Exploration
+
+![](images/ortg.png)
+
+The difference in offensive rating inside and outside of the penalty is quite stark, with teams producing at an average rate of 7.5 more points per 100 possessions with opponents in the penalty across the seasons considered. Note the 2019-20 season only considers the games played prior to the pause due to the pandemic, while the 2021-22 season considers games played through January 5, 2022.
+
+![](images/free_throws.png)
+
+With the increase in offensive production with opponents in the penalty noted, how much are teams benefiting from free throw attempts gained through the penalty? These are free throws resulting from non-shooting fouls in the penalty, which would otherwise result in an inbound for the team being fouled.
+
+As trips to the free throw line are associated with high expected points, these additional free throws correlate fairly well with team offensive rating. 
+
+![](images/shot_types.png)
+
+Offensive performance increases for teams enjoying the bonus and additional free throws gained correlates well with overall offensive rating. While the former point could be due to defenses playing less aggressively, offensive teams may change their approach to put more pressure on the defense.
+
+Layups and dunks tick up for an offense when the opposition enters the penalty. Additionally, because missed shots that result in free throws are not included in this dataset, the changes in layups and dunks may be understated as those shots tend to result in free throws more often.
